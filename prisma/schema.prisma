@@ -34,3 +34,12 @@ model PasswordResetToken {
   expiresAt DateTime
   createdAt DateTime @default(now())
 }
+
+model PushSubscription {
+  id         String  @id @default(auto()) @map("_id") @db.ObjectId
+  endpoint   String
+  expiration String?
+  p256dh     String
+  auth       String
+  userId     String
+}

@@ -10,6 +10,8 @@ import { Server, Socket } from 'socket.io';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/lib/prisma.service';
 
+import * as webpush from 'web-push';
+
 @WebSocketGateway({
   cors: {
     origin: '*',
@@ -20,10 +22,47 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) {
+    console.log(webpush);
+    webpush.setVapidDetails(
+      'mailto:barba.club.barbearia.2010@gmail.com',
+      'BDB1nk4hFfUIGFFPuRwU55sRzB-jMnSSYdMKzoC1rkgFfuSMT7CGPn2LM37qmmM_s5J1R6JpbE3S-56q0y5qdG4',
+      'FbAQMxAZVC_bJ1IXuwBT6GihgdL1wNBRunmoJwRWx2w',
+    );
+  }
+
+  async updateQueuePositions(remainingQueue) {
+    const queue = await this.prisma.queue.findMany();
+
+    queue.forEach(async (item) => {
+      const userPosition = remainingQueue.find((item) => item.id === item.id);
+
+      if (item.position !== userPosition.position) {
+        // Enviar notificação para o usuário
+        const subscription = await this.prisma.pushSubscription.findFirst({
+          where: { userId: item.userId },
+        });
+        if (subscription) {
+          await webpush.sendNotification(
+            {
+              endpoint: subscription.endpoint,
+              keys: {
+                p256dh: subscription.p256dh,
+                auth: subscription.auth,
+              },
+            },
+            JSON.stringify({
+              title: 'Mudança na fila',
+              body: `Sua posição na fila agora é #${item.position}.`,
+              icon: '/icon.png', // Opcional: URL do ícone
+            }),
+          );
+        }
+      }
+    });
+  }
 
   async handleConnection(client: Socket) {
-    console.log('Cliente conectado:', client.id);
     const queue = await this.getQueue();
     client.emit('QUEUE_UPDATED', queue);
   }
@@ -74,6 +113,8 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
         data: { position: i + 1 },
       });
     }
+
+    await this.updateQueuePositions(remainingQueue);
     this.broadcastQueue();
   }
 
