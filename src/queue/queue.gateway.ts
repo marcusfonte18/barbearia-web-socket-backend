@@ -38,7 +38,6 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userPosition = remainingQueue.find((item) => item.id === item.id);
 
       if (item.position !== userPosition.position) {
-        // Enviar notificação para o usuário
         const subscription = await this.prisma.pushSubscription.findFirst({
           where: { userId: item.userId },
         });
