@@ -9,7 +9,6 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/lib/prisma.service';
-
 import * as webpush from 'web-push';
 
 @WebSocketGateway({
@@ -23,7 +22,6 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   constructor(private prisma: PrismaService) {
-    console.log(webpush);
     webpush.setVapidDetails(
       'mailto:barba.club.barbearia.2010@gmail.com',
       'BDB1nk4hFfUIGFFPuRwU55sRzB-jMnSSYdMKzoC1rkgFfuSMT7CGPn2LM37qmmM_s5J1R6JpbE3S-56q0y5qdG4',
@@ -31,47 +29,25 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
   }
 
-  async updateQueuePositions(remainingQueue) {
-    const queue = await this.prisma.queue.findMany();
-
-    queue.forEach(async (item) => {
-      const userPosition = remainingQueue.find((item) => item.id === item.id);
-
-      if (item.position !== userPosition.position) {
-        const subscription = await this.prisma.pushSubscription.findFirst({
-          where: { userId: item.userId },
-        });
-        if (subscription) {
-          await webpush.sendNotification(
-            {
-              endpoint: subscription.endpoint,
-              keys: {
-                p256dh: subscription.p256dh,
-                auth: subscription.auth,
-              },
-            },
-            JSON.stringify({
-              title: 'Mudança na fila',
-              body: `Sua posição na fila agora é #${item.position}.`,
-              icon: '/icon.png', // Opcional: URL do ícone
-            }),
-          );
-        }
-      }
-    });
-  }
-
   async handleConnection(client: Socket) {
-    const queue = await this.getQueue();
-    client.emit('QUEUE_UPDATED', queue);
+    const barberId = client.handshake.query.barberId as string; // Recebe o barberId do cliente
+    if (!barberId) {
+      console.error('barberId não fornecido');
+      client.disconnect(); // Desconecta o cliente se o barberId não for fornecido
+      return;
+    }
+
+    const queue = await this.getQueue(barberId); // Busca a fila do barbeiro específico
+    client.emit('QUEUE_UPDATED', queue); // Envia apenas a fila do barbeiro
   }
 
   handleDisconnect(client: Socket) {
     console.log('Cliente desconectado:', client.id);
   }
 
-  async getQueue() {
+  async getQueue(barberId: string) {
     return await this.prisma.queue.findMany({
+      where: { barberId },
       orderBy: { position: 'asc' },
       select: {
         id: true,
@@ -89,20 +65,32 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('ADD_TO_QUEUE')
-  async addToQueue(@MessageBody() { userId }: { userId: string }) {
-    const positionCount = (await this.prisma.queue.count()) + 1;
-    await this.prisma.queue.create({
-      data: { position: positionCount, userId },
+  async addToQueue(
+    @MessageBody() { userId, barberId }: { userId: string; barberId: string },
+  ) {
+    const positionCount = await this.prisma.queue.count({
+      where: { barberId },
     });
 
-    this.broadcastQueue();
+    await this.prisma.queue.create({
+      data: {
+        position: positionCount + 1,
+        userId,
+        barberId,
+      },
+    });
+
+    this.broadcastQueue(barberId);
   }
 
   @SubscribeMessage('REMOVE_TO_QUEUE')
-  async removeFromQueue(@MessageBody() { id }: { id: string }) {
+  async removeFromQueue(
+    @MessageBody() { id, barberId }: { id: string; barberId: string },
+  ) {
     await this.prisma.queue.delete({ where: { id } });
 
     const remainingQueue = await this.prisma.queue.findMany({
+      where: { barberId },
       orderBy: { position: 'asc' },
     });
 
@@ -113,12 +101,44 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
     }
 
-    await this.updateQueuePositions(remainingQueue);
-    this.broadcastQueue();
+    await this.updateQueuePositions(remainingQueue, barberId);
+    this.broadcastQueue(barberId);
   }
 
-  private async broadcastQueue() {
-    const queue = await this.getQueue();
-    this.server.emit('QUEUE_UPDATED', queue);
+  private async broadcastQueue(barberId: string) {
+    const queue = await this.getQueue(barberId); // Busca a fila do barbeiro específico
+    this.server.emit('QUEUE_UPDATED', queue); // Envia apenas a fila do barbeiro
+  }
+
+  async updateQueuePositions(remainingQueue, barberId: string) {
+    const queue = await this.prisma.queue.findMany({
+      where: { barberId },
+    });
+
+    queue.forEach(async (item) => {
+      const userPosition = remainingQueue.find((qItem) => qItem.id === item.id);
+      if (item.position !== userPosition?.position) {
+        const subscription = await this.prisma.pushSubscription.findFirst({
+          where: { userId: item.userId },
+        });
+
+        if (subscription) {
+          await webpush.sendNotification(
+            {
+              endpoint: subscription.endpoint,
+              keys: {
+                p256dh: subscription.p256dh,
+                auth: subscription.auth,
+              },
+            },
+            JSON.stringify({
+              title: 'Mudança na fila',
+              body: `Sua posição na fila agora é #${item?.position}.`,
+              icon: '/icon.png',
+            }),
+          );
+        }
+      }
+    });
   }
 }

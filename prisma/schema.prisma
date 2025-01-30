@@ -12,8 +12,22 @@ model Queue {
   position  Int
   inChair   Boolean  @default(false)
   userId    String   @db.ObjectId
+  barberId  String   @db.ObjectId
   user      User     @relation(fields: [userId], references: [id])
+  barber    Barber   @relation(fields: [barberId], references: [id])
   createdAt DateTime @default(now())
+}
+
+model Barber {
+  id    String  @id @default(auto()) @map("_id") @db.ObjectId
+  name  String
+  queue Queue[]
+}
+
+model Barbershop {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  is_open   Boolean
+  opened_at DateTime
 }
 
 model User {
