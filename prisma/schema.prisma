@@ -51,7 +51,7 @@ model PasswordResetToken {
 
 model PushSubscription {
   id         String  @id @default(auto()) @map("_id") @db.ObjectId
-  endpoint   String
+  endpoint   String  @unique
   expiration String?
   p256dh     String
   auth       String

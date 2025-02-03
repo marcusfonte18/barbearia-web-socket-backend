@@ -163,7 +163,9 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
     title: string,
     body: string,
   ) {
-    if (subscription) {
+    if (!subscription) return;
+
+    try {
       await webpush.sendNotification(
         {
           endpoint: subscription.endpoint,
@@ -172,12 +174,17 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
             auth: subscription.auth,
           },
         },
-        JSON.stringify({
-          title,
-          body,
-          icon: '/icon.png',
-        }),
+        JSON.stringify({ title, body, icon: '/icon.png' }),
       );
+    } catch (error) {
+      if (error.statusCode === 410 || error.statusCode === 404) {
+        console.warn('Removendo subscription inválida:', subscription.endpoint);
+        await this.prisma.pushSubscription.delete({
+          where: { endpoint: subscription.endpoint },
+        });
+      } else {
+        console.error('Erro ao enviar push notification:', error);
+      }
     }
   }
 
