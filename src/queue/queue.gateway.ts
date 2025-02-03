@@ -29,16 +29,19 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
   }
 
-  async handleConnection(client: Socket) {
-    const barberId = client.handshake.query.barberId as string; // Recebe o barberId do cliente
-    if (!barberId) {
-      console.error('barberId não fornecido');
-      client.disconnect(); // Desconecta o cliente se o barberId não for fornecido
-      return;
-    }
+  async getBarbershopStatus() {
+    const barbershop = await this.prisma.barbershop.findFirst();
+    return barbershop?.is_open;
+  }
 
-    const queue = await this.getQueue(barberId); // Busca a fila do barbeiro específico
-    client.emit('QUEUE_UPDATED', queue); // Envia apenas a fila do barbeiro
+  async handleConnection(client: Socket) {
+    const barberId = client.handshake.query.barberId as string;
+
+    const queue = await this.getQueue(barberId);
+    const isOpen = await this.getBarbershopStatus();
+
+    client.emit('QUEUE_UPDATED', queue);
+    client.emit('BARBER_STATUS', { isOpen });
   }
 
   handleDisconnect(client: Socket) {
@@ -46,6 +49,8 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   async getQueue(barberId: string) {
+    if (!barberId) return;
+
     return await this.prisma.queue.findMany({
       where: { barberId },
       orderBy: { position: 'asc' },
@@ -62,6 +67,35 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
         },
       },
     });
+  }
+
+  @SubscribeMessage('BARBER_STATUS')
+  async handleBarberStatus() {
+    const barbershop = await this.prisma.barbershop.findFirst();
+
+    if (!barbershop) {
+      await this.prisma.barbershop.create({
+        data: { is_open: true, opened_at: new Date() },
+      });
+
+      return this.server.emit('BARBER_STATUS', { isOpen: true });
+    }
+
+    if (barbershop.is_open) {
+      await this.prisma.barbershop.update({
+        where: { id: barbershop.id },
+        data: { is_open: false },
+      });
+
+      return this.server.emit('BARBER_STATUS', { isOpen: false });
+    }
+
+    await this.prisma.barbershop.update({
+      where: { id: barbershop.id },
+      data: { is_open: true, opened_at: new Date() },
+    });
+
+    return this.server.emit('BARBER_STATUS', { isOpen: true });
   }
 
   @SubscribeMessage('ADD_TO_QUEUE')
