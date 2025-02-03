@@ -8,8 +8,9 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from 'src/lib/prisma.service';
 import * as webpush from 'web-push';
+
+import { PrismaService } from 'src/lib/prisma.service';
 
 @WebSocketGateway({
   cors: {
@@ -78,6 +79,10 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
         data: { is_open: true, opened_at: new Date() },
       });
 
+      await this.sendUpdateBarberStatus(
+        'Barbearia aberta ✂️',
+        'Já estamos abertos! Venha garantir seu corte e evitar filas. Agende-se agora!',
+      );
       return this.server.emit('BARBER_STATUS', { isOpen: true });
     }
 
@@ -87,6 +92,10 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
         data: { is_open: false },
       });
 
+      await this.sendUpdateBarberStatus(
+        'Barbearia fechada 🚪',
+        'A barbearia fechou no momento. Fique de olho para quando reabrirmos!',
+      );
       return this.server.emit('BARBER_STATUS', { isOpen: false });
     }
 
@@ -94,6 +103,11 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
       where: { id: barbershop.id },
       data: { is_open: true, opened_at: new Date() },
     });
+
+    await this.sendUpdateBarberStatus(
+      'Barbearia aberta ✂️',
+      'Já estamos abertos! Venha garantir seu corte e evitar filas. Agende-se agora!',
+    );
 
     return this.server.emit('BARBER_STATUS', { isOpen: true });
   }
@@ -135,7 +149,7 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
     }
 
-    await this.updateQueuePositions(remainingQueue, barberId);
+    await this.sendUpdateQueuePosition(remainingQueue, barberId);
     this.broadcastQueue(barberId);
   }
 
@@ -144,12 +158,43 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit('QUEUE_UPDATED', queue); // Envia apenas a fila do barbeiro
   }
 
-  async updateQueuePositions(remainingQueue, barberId: string) {
+  private async sendPushNotification(
+    subscription: any,
+    title: string,
+    body: string,
+  ) {
+    if (subscription) {
+      await webpush.sendNotification(
+        {
+          endpoint: subscription.endpoint,
+          keys: {
+            p256dh: subscription.p256dh,
+            auth: subscription.auth,
+          },
+        },
+        JSON.stringify({
+          title,
+          body,
+          icon: '/icon.png',
+        }),
+      );
+    }
+  }
+
+  async sendUpdateBarberStatus(body: string, title: string) {
+    const subscriptions = await this.prisma.pushSubscription.findMany();
+
+    await Promise.all(
+      subscriptions.map((sub) => this.sendPushNotification(sub, title, body)),
+    );
+  }
+
+  async sendUpdateQueuePosition(remainingQueue, barberId: string) {
     const queue = await this.prisma.queue.findMany({
       where: { barberId },
     });
 
-    queue.forEach(async (item) => {
+    const notifications = queue.map(async (item) => {
       const userPosition = remainingQueue.find((qItem) => qItem.id === item.id);
       if (item.position !== userPosition?.position) {
         const subscription = await this.prisma.pushSubscription.findFirst({
@@ -157,22 +202,15 @@ export class QueueGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
 
         if (subscription) {
-          await webpush.sendNotification(
-            {
-              endpoint: subscription.endpoint,
-              keys: {
-                p256dh: subscription.p256dh,
-                auth: subscription.auth,
-              },
-            },
-            JSON.stringify({
-              title: 'Mudança na fila',
-              body: `Sua posição na fila agora é #${item?.position}.`,
-              icon: '/icon.png',
-            }),
+          return this.sendPushNotification(
+            subscription,
+            'Mudança na fila',
+            `Sua posição na fila agora é #${item?.position}.`,
           );
         }
       }
     });
+
+    await Promise.all(notifications);
   }
 }
